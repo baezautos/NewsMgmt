@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      body { font-family: Arial, sans-serif; padding: 1rem; }
+      .tab, .button {
+        margin: 5px; padding: 8px 12px; font-size: 14px; cursor: pointer;
+      }
+      .tab.active {
+        background-color: #4285F4; color: white; font-weight: bold;
+      }
+      .card, .readonly-card {
+        background: #f9f9f9; padding: 1em; border: 1px solid #ccc; margin-top: 1em;
+      }
+      .readonly-card { background: #fff; color: #333; }
+      label { display: block; margin-top: 0.5em; }
+      input, select, textarea { width: 100%; margin-bottom: 1em; }
+    </style>
+  </head>
+  <body>
+    <div id="app">Loading...</div>
+    <script>
+      let lookups = {}, currentLocation = '', currentWeekLabel = '', currentWeekIndex = 0, isDraftDisplayed = false;
+
+      google.script.run.withSuccessHandler(setupApp).getLookups();
+
+      function setupApp(data) {
+        lookups = data;
+
+        if (!lookups.locations?.length || !lookups.weeks?.length) {
+          document.getElementById('app').innerHTML = '<p style="color:red">❌ Missing locations or weeks in Lookups sheet.</p>';
+          return;
+        }
+
+        currentLocation = lookups.locations[0];
+
+        const today = new Date();
+        currentWeekIndex = lookups.weeks.findIndex(range => {
+          const [startStr, endStr] = range.split(' to ');
+          const start = new Date(startStr);
+          const end = new Date(endStr);
+          return today >= start && today <= end;
+        });
+        if (currentWeekIndex === -1) currentWeekIndex = lookups.weeks.length - 1;
+        currentWeekLabel = lookups.weeks[currentWeekIndex];
+
+        renderNav();
+        loadSubs();
+      }
+
+      function renderNav() {
+        const app = document.getElementById('app');
+        app.innerHTML = '';
+
+        // Location Tabs
+        const tabs = document.createElement('div');
+        lookups.locations.forEach(loc => {
+          const btn = document.createElement('button');
+          btn.textContent = loc;
+          btn.className = 'tab' + (loc === currentLocation ? ' active' : '');
+          btn.onclick = () => {
+            currentLocation = loc;
+            renderNav();
+            loadSubs();
+          };
+          tabs.appendChild(btn);
+        });
+        app.appendChild(tabs);
+
+        // Week Nav + Add Section
+        const navRow = document.createElement('div');
+        navRow.style.margin = '1em 0';
+        navRow.style.display = 'flex';
+        navRow.style.alignItems = 'center';
+        navRow.style.gap = '10px';
+        navRow.style.flexWrap = 'wrap';
+
+        const label = document.createElement('strong');
+        label.textContent = `Week: ${currentWeekLabel}`;
+        navRow.appendChild(label);
+
+        const prevBtn = document.createElement('button');
+        prevBtn.textContent = '← Prev';
+        prevBtn.className = 'button';
+        prevBtn.disabled = currentWeekIndex === 0;
+        prevBtn.onclick = () => {
+          if (currentWeekIndex > 0) {
+            currentWeekIndex--;
+            currentWeekLabel = lookups.weeks[currentWeekIndex];
+            renderNav();
+            loadSubs();
+          }
+        };
+        navRow.appendChild(prevBtn);
+
+        const nextBtn = document.createElement('button');
+        nextBtn.textContent = 'Next →';
+        nextBtn.className = 'button';
+        nextBtn.disabled = currentWeekIndex === lookups.weeks.length - 1;
+        nextBtn.onclick = () => {
+          if (currentWeekIndex < lookups.weeks.length - 1) {
+            currentWeekIndex++;
+            currentWeekLabel = lookups.weeks[currentWeekIndex];
+            renderNav();
+            loadSubs();
+          }
+        };
+        navRow.appendChild(nextBtn);
+
+        const addBtn = document.createElement('button');
+        addBtn.textContent = '+ Add Section';
+        addBtn.className = 'button';
+        addBtn.onclick = () => {
+          const obj = {
+            WeekLabel: currentWeekLabel,
+            Location: currentLocation,
+            SectionType: lookups.sectionTypes[0],
+            TextContent: '',
+            ExtLink: '',
+            ImageLinks: '',
+            SectionID: crypto.randomUUID(),
+            isDraft: true
+          };
+          renderCard(obj);
+        };
+        navRow.appendChild(addBtn);
+
+        app.appendChild(navRow);
+
+        const container = document.createElement('div');
+        container.id = 'subs';
+        app.appendChild(container);
+      }
+
+function loadSubs() {
+  isDraftDisplayed = false;
+  google.script.run
+    .withSuccessHandler(function(data) {
+      console.log('📥 Data received from getSubmissions:', data);
+      renderSubs(data);
+    })
+    .withFailureHandler(function(error) {
+      console.error('❌ Error from getSubmissions:', error.message);
+      document.getElementById('subs').innerHTML = '<p style="color:red">❌ Failed to load submissions.</p>';
+    })
+    .getSubmissions(currentLocation, currentWeekLabel);
+}
+
+function renderSubs(data) {
+  console.log('📦 renderSubs received:', data); // log again to confirm
+  const container = document.getElementById('subs');
+  container.innerHTML = '';
+
+  if (!Array.isArray(data)) {
+    container.innerHTML = '<p style="color:red">⚠️ Submission data is missing or malformed.</p>';
+    return;
+  }
+
+  const countBox = document.createElement('p');
+  countBox.innerHTML = `📦 <strong>Submissions received:</strong> ${data.length}`;
+  container.appendChild(countBox);
+
+  if (data.length === 0) {
+    container.innerHTML += '<p>No submissions yet for this week.</p>';
+    return;
+  }
+
+        data.forEach(obj => {
+          const div = document.createElement('div');
+          div.className = 'readonly-card';
+
+          for (const key in obj) {
+            if (key === 'isDraft' || !obj[key]) continue;
+
+            const p = document.createElement('p');
+
+            if (key === 'ExtLink') {
+              p.innerHTML = `<strong>${key}:</strong> <a href="${obj[key]}" target="_blank">${obj[key]}</a>`;
+            } else if (key === 'ImageLinks') {
+              p.innerHTML = `<strong>${key}:</strong> ${renderImageLinks(obj[key])}`;
+            } else {
+              p.innerHTML = `<strong>${key}:</strong> ${obj[key]}`;
+            }
+
+            div.appendChild(p);
+          }
+
+          container.appendChild(div);
+        });
+      }
+
+      function renderImageLinks(links) {
+        return links.split(',').map(url => `<a href="${url.trim()}" target="_blank">View</a>`).join(' ');
+      }
+
+      function renderCard(obj) {
+        isDraftDisplayed = true;
+
+        const card = document.createElement('div');
+        card.className = 'card';
+
+        // Week Picker
+        const weekLabel = document.createElement('label');
+        weekLabel.textContent = 'Select Week';
+        card.appendChild(weekLabel);
+
+        const weekSelect = document.createElement('select');
+        lookups.weeks.forEach(week => {
+          const opt = document.createElement('option');
+          opt.value = week;
+          opt.textContent = week;
+          weekSelect.appendChild(opt);
+        });
+        weekSelect.value = obj.WeekLabel;
+        weekSelect.onchange = () => obj.WeekLabel = weekSelect.value;
+        card.appendChild(weekSelect);
+
+        // Section Type Picker
+        const label = document.createElement('label');
+        label.textContent = 'Section Type';
+        card.appendChild(label);
+
+        const select = document.createElement('select');
+        lookups.sectionTypes.forEach(t => {
+          const option = document.createElement('option');
+          option.value = t;
+          option.textContent = t;
+          select.appendChild(option);
+        });
+        select.value = obj.SectionType;
+        select.onchange = () => obj.SectionType = select.value;
+        card.appendChild(select);
+
+        // Text Content
+        const textarea = document.createElement('textarea');
+        textarea.placeholder = 'Text Content';
+        textarea.value = obj.TextContent;
+        textarea.oninput = () => obj.TextContent = textarea.value;
+        card.appendChild(textarea);
+
+        // External Link
+        const extLink = document.createElement('input');
+        extLink.type = 'url';
+        extLink.placeholder = 'External Link';
+        extLink.value = obj.ExtLink;
+        extLink.oninput = () => obj.ExtLink = extLink.value;
+        card.appendChild(extLink);
+
+        // File Upload
+        const fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.multiple = true;
+        fileInput.onchange = () => uploadFiles(fileInput.files, obj);
+        card.appendChild(fileInput);
+
+        // Save Button
+        const save = document.createElement('button');
+        save.textContent = 'Save';
+        save.className = 'button';
+        save.onclick = () => {
+          delete obj.isDraft;
+          google.script.run.withSuccessHandler(() => {
+            alert('Saved ✅');
+            loadSubs();
+          }).saveSubmission(obj);
+        };
+        card.appendChild(save);
+
+        const container = document.getElementById('subs');
+        container.innerHTML = '';
+        container.appendChild(card);
+      }
+    </script>
+  </body>
+</html>
